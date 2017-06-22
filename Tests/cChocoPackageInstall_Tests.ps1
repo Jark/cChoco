@@ -11,12 +11,17 @@ Import-Module -Name $ResourceFile.FullName
 
 Describe -Name "Testing $ResourceName loaded from $ResourceFile" -Fixture {
     Context -Name "Package is not installed" -Fixture {
-        Mock -CommandName 'Get-ChocoInstalledPackage' -ModuleName 'cChocoPackageInstall' -MockWith { 
-            return [pscustomobject]@{
-                'Name'    = 'NotGoogleChrome'
-                'Version' = '1.0.0'
-            }
-        }
+        # this mock is always evaluated last, so we don't side-effect the local pc running the tests, see: https://github.com/pester/Pester/wiki/Mock.
+        Mock Invoke-Choco -ModuleName 'cChocoPackageInstall' -MockWith {[pscustomobject]@{ 'Output'  = @('output'); 'Success' = $false;}}
+        Mock Invoke-Choco -ModuleName 'cChocoPackageInstall'`
+                          -ParameterFilter { $Parameters[0] -eq "list" }`
+                          -MockWith {
+                            return [pscustomobject]@{
+                                'Output'  = @('Chocolatey v0.10.7', 'NotGoogleChrome 1.0.0', '1 packages installed');
+                                'Success' = $true;
+                            }
+                          }
+        Mock Test-Command -ModuleName 'cChocoPackageInstall' -MockWith { return $True; }
         
         $Scenario1 = @{
             Name   = 'GoogleChrome'
@@ -24,6 +29,20 @@ Describe -Name "Testing $ResourceName loaded from $ResourceFile" -Fixture {
         }
         It -name "Test-TargetResource -ensure 'Present' should return False" -test {
             Test-TargetResource @Scenario1 | Should Be $False
+        }
+       
+        It -name "Set-TargetResource -ensure 'Present' shoudl install package" {
+            Mock Invoke-Choco -ModuleName 'cChocoPackageInstall'`
+                        -MockWith {
+                            return [pscustomobject]@{
+                                'Output'  = @('output');
+                                'Success' = $true;
+                            }
+                        }`
+                        -ParameterFilter { -not (Compare-Object $Parameters "install", "GoogleChrome", "-y") }`
+                        -Verifiable
+            Set-TargetResource @Scenario1
+            Assert-VerifiableMocks
         }
 
         $Scenario2 = @{
@@ -64,19 +83,32 @@ Describe -Name "Testing $ResourceName loaded from $ResourceFile" -Fixture {
     }
 
     Context -Name "Package is installed with version 1.0.0" -Fixture {
-        Mock -CommandName 'Get-ChocoInstalledPackage' -ModuleName 'cChocoPackageInstall' -MockWith { 
-            return [pscustomobject]@{
-                'Name'    = 'GoogleChrome'
-                'Version' = '1.0.0'
-            }
-        }
+        # this mock is always evaluated last, so we don't side-effect the local pc running the tests, see: https://github.com/pester/Pester/wiki/Mock.
+        Mock Invoke-Choco -ModuleName 'cChocoPackageInstall' -MockWith {[pscustomobject]@{ 'Output'  = @('output'); 'Success' = $false;}}
+        Mock Invoke-Choco -ModuleName 'cChocoPackageInstall'`
+                          -ParameterFilter { $Parameters[0] -eq "list" }`
+                          -MockWith {
+                            return [pscustomobject]@{
+                                'Output'  = @(
+                                    'Chocolatey v0.10.7',
+                                    'GoogleChrome 1.0.0',
+                                    '1 packages installed',
+                                    '',
+                                    'Did you know Pro / Business automatically syncs with Programs and',
+                                    ' Features? Learn more about Package Synchronizer at ',
+                                    ' https://chocolatey.org/compare'
+                                );
+                                'Success' = $true;
+                            }
+                          }
+        Mock Test-Command -ModuleName 'cChocoPackageInstall' -MockWith { return $True; }      
 
         $Scenario1 = @{
             Name   = 'GoogleChrome'
             Ensure = 'Present'
         }
         It -name "Test-TargetResource -ensure 'Present' should return True" -test {
-            Test-TargetResource @Scenario1 | Should Be $True
+            Test-TargetResource @Scenario1 | Should Be $True            
         }
 
         $Scenario2 = @{
@@ -85,6 +117,19 @@ Describe -Name "Testing $ResourceName loaded from $ResourceFile" -Fixture {
         }
         It -name "Test-TargetResource -ensure 'Absent' should return False" -test {
             Test-TargetResource @Scenario2 | Should Be $False
+        }
+        It -name "Set-TargetResource -ensure 'Absent' should install package" -test {
+             Mock Invoke-Choco -ModuleName 'cChocoPackageInstall'`
+                        -MockWith {
+                            return [pscustomobject]@{
+                                'Output'  = @('output');
+                                'Success' = $true;
+                            }
+                        }`
+                        -ParameterFilter { -not (Compare-Object $Parameters "uninstall", "GoogleChrome", "-y") }`
+                        -Verifiable
+            Set-TargetResource @Scenario2
+            Assert-VerifiableMocks
         }
 
         $Scenario3 = @{

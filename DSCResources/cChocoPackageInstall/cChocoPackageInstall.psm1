@@ -128,7 +128,6 @@ function Test-TargetResource
         [bool]
         $AutoUpgrade = $false
     )
-
     Write-Verbose -Message 'Start Test-TargetResource'
 
     if (-Not (Test-ChocoInstalled)) {
@@ -191,11 +190,28 @@ Function Test-Command
         Write-Verbose -Message "$command does NOT exist"
         return $false
     } 
-} 
+}
+
+Function Invoke-Choco {
+    Param(        
+        [Parameter(Mandatory)][string[]] $Parameters
+    )
+
+    Write-Verbose "Running choco $($Parameters -join ' ')"
+
+    $output = &choco $Parameters
+    $success = $?
+
+    $output | ForEach-Object { Write-Verbose -Message $_ }
+
+    return [pscustomobject]@{
+        'Output' = $output
+        'Success' = $success
+    }
+}
 
 function InstallPackage
 {
-    [Diagnostics.CodeAnalysis.SuppressMessage('PSAvoidUsingInvokeExpression','')]
     param(
         [Parameter(Position=0,Mandatory)]
         [string]$pName,
@@ -206,29 +222,30 @@ function InstallPackage
         [Parameter(Position=3)]
         [string]$pSource,
         [Parameter(Position=4)]
-        [string]$cParams
+        [string]$cParams # there's an issue here that if someone passes in --extraParam1=val1 --extraParam2=val2 it doesn't work
     ) 
 
     $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine')
     
-    [string]$chocoinstallparams = '-y'
+    [string[]]$chocoinstallparams = 'install', $pName, '-y'
     if ($pParams) {
-        $chocoinstallparams += " --params=`"$pParams`""
+        $chocoinstallparams += "--params=`"$pParams`""
     }
     if ($pVersion) {
-        $chocoinstallparams += " --version=`"$pVersion`""
+        $chocoinstallparams += "--version=`"$pVersion`""
     }
     if ($pSource) {
-        $chocoinstallparams += " --source=`"$pSource`""
+        $chocoinstallparams += "--source=`"$pSource`""
     }
     if ($cParams) {
-        $chocoinstallparams += " $cParams"
-    }
-    Write-Verbose -Message "Install command: 'choco install $pName $chocoinstallparams'"
+        $chocoinstallparams += $cParams
+    }    
     
-    $packageInstallOuput = Invoke-Expression -Command "choco install $pName $chocoinstallparams"
-    Write-Verbose -Message "Package output $packageInstallOuput "
-
+    $packageInstallOutput = Invoke-Choco $chocoinstallparams 
+    if (-not $packageInstallOutput.Success)  {
+        throw "failed to install package $pName"
+    }
+    
     #refresh path varaible in powershell, as choco doesn"t, to pull in git
     $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine')
 }
@@ -243,22 +260,17 @@ function UninstallPackage
     )
 
     $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine')
-    
-    #Todo: Refactor
-    if (-not ($pParams))
-    {
-        Write-Verbose -Message 'Uninstalling Package Standard'
-        $packageUninstallOuput = choco uninstall $pName -y
+    [string[]]$uninstallParams = 'uninstall', $pName, '-y'
+    if ($pParams) {
+        $uninstallParams += $pParams
     }
-    elseif ($pParams)
-    {
-        Write-Verbose -Message "Uninstalling Package with params $pParams"
-        $packageUninstallOuput = choco uninstall $pName --params="$pParams" -y            
-    }
-    
-    Write-Verbose -Message "Package uninstall output $packageUninstallOuput "
 
-    #refresh path varaible in powershell, as choco doesn"t, to pull in git
+    $uninstallresult = Invoke-Choco $uninstallParams
+    if (-not $uninstallresult.Success) {
+        throw "failed to uninstall package $pName"
+    }
+
+    #refresh path variable in powershell, as choco doesn't, to pull in git
     $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine')
 }
 
@@ -304,17 +316,17 @@ Function Test-LatestVersionInstalled {
     ) 
     Write-Verbose -Message "Testing if $pName can be upgraded"
 
-    [string]$chocoupgradeparams = '--noop'
+    [string[]]$chocoupgradeparams = 'upgrade', $pName, '--noop'
     if ($pSource) {
-        $chocoupgradeparams += " --source=`"$pSource`""
+        $chocoupgradeparams += "--source=`"$pSource`""
     }
 
-    Write-Verbose -Message "Testing if $pName can be upgraded: 'choco upgrade $pName $chocoupgradeparams'"
+    $packageUpgradeOutput = Invoke-Choco $chocoupgradeparams
+    if (-not $packageUpgradeOutput.Success) {
+        throw "choco upgrade failed, cannot check if $pName can be upgraded"
+    }    
     
-    $packageUpgradeOuput = Invoke-Expression -Command "choco upgrade $pName $chocoupgradeparams"
-    $packageUpgradeOuput | ForEach-Object {Write-Verbose -Message $_} 
-    
-    if ($packageUpgradeOuput -match "$pName.*is the latest version available based on your source") {
+    if ($packageUpgradeOutput.Output -match "$pName.*is the latest version available based on your source") {
         return $true
     } 
     return $false
@@ -334,7 +346,6 @@ function global:Write-Host
         $ForegroundColor,
         [ConsoleColor]
         $BackgroundColor
-
     )
 
     #Override default Write-Host...
@@ -381,11 +392,18 @@ Function Upgrade-Package {
 }
 
 function Get-ChocoInstalledPackage {
-    $res = choco list -lo | ForEach-Object {
+    $listPackages = Invoke-Choco "list", "-lo"
+    if (-not $listPackages.Success) {
+        throw "unable to retrieve the list of installed packages."
+    }
+    
+    $res = $listPackages.Output | ForEach-Object {
         $Obj = $_ -split '\s'
-        [pscustomobject]@{
-            'Name'    = $Obj[0]
-            'Version' = $Obj[1]     
+        if ($Obj.length -eq 2) {
+            [pscustomobject]@{
+                'Name'    = $Obj[0]
+                'Version' = $Obj[1]
+            }
         }
     }
     Return $res
